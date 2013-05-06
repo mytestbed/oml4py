@@ -55,7 +55,7 @@ class OMLBase:
     def __init__(self,appname,domain=None,sender=None,uri=None,expid=None):
         self._banner()
         self.oml = True
-        seld.urandom = random.SystemRandom()
+        self.urandom = random.SystemRandom()
 
         # process the command line
         parser = argparse.ArgumentParser(prog=appname)
@@ -136,10 +136,7 @@ class OMLBase:
         self.schema = ""
         self.nextseq = {}
         self.streamid = {}
-        if self.oml:        
-          # Set socket
-          self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-          self.sock.settimeout(5) 
+        self.sock = None
 
 
     def addmp(self,mpname,schema):
@@ -156,46 +153,51 @@ class OMLBase:
         self.schema += str_schema
         self.nextseq[mpname] = 0
         self.streamid[mpname] = self.streams
-   
+        self._write_header()
+
 
     def start(self):
-
-      if self.oml:        
-        # Use socket to connect to OML server
-        sys.stderr.write("INFO\tCollection URI is tcp:%s:%d\n" % (self.omlserver, self.omlport))
-
-        self.starttime = int(time())
-
-        header = "protocol: " + str(self.PROTOCOL) + '\n' + "domain: " + str(self.domain) + '\n' + \
-               "start-time: " + str(self.starttime) + '\n' + "sender-id: " + str(self.sender) + '\n' + \
-               "app-name: " + str(self.appname) + '\n' + \
-               str(self.schema) + '\n' + "content: text" + '\n' + '\n'    
-
-        try:
-          self.sock.connect((self.omlserver,self.omlport))
-          self.sock.settimeout(None)
-          self.sock.send(to_bytes(header))
-        except socket.error as e:
-          sys.stderr.write("ERROR\tCould not connect to OML server: %s\n" %  e)
-          self._disable_oml()
-          sys.stdout.write(header)
+      if self.oml:
+          if self.sock is None:
+              # Use socket to connect to OML server
+              sys.stderr.write("INFO\tCollection URI is tcp:%s:%d\n" % (self.omlserver, self.omlport))
+              self.starttime = int(time())
+              try:
+                  self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                  self.sock.settimeout(5) 
+                  self.sock.connect((self.omlserver,self.omlport))
+                  self.sock.settimeout(None)
+                  self._write_header()
+              except socket.error as e:
+                  sys.stderr.write("ERROR\tCould not connect to OML server: %s\n" %  e)
+                  self._disable_oml()
+                  sys.stdout.write(header)
+          else:
+              sys.stderr.write("WARN\tstart() called unexpectedly\n")
       else:
         sys.stderr.write("WARN\tOML disabled\n")
 
 
     def close(self):
-        streamid = None
-        if self.oml:
+        self.streamid = None
+        if self.oml and self.sock:
             self.sock.close()
+            self.sock = None;
+
+
+    def generate_guid(self):
+        guid = self.urandom.getrandbits(64)
+        while 0 == guid:
+            guid = self.urandom.getrandbits(64)
+        return guid
 
 
     def inject(self,mpname,values):
-
-        str_inject = ""
         if self.oml and self.starttime == 0:
             sys.stderr.write("ERROR\tDid not call start()\n")
             self._disable_oml()
-
+        # prepare the measurement info
+        str_inject = ""
         timestamp = time() - self.starttime
         try:
             streamid = self.streamid[mpname]
@@ -204,31 +206,25 @@ class OMLBase:
         except KeyError:
             sys.stderr.write("ERROR\tTried to inject into unknown MP '%s'\n" % mpname)
             return
-
+        # prepare the measurement tuple
         try:
             for item in values:
                 str_inject += '\t'
-                str_inject += _escape(str(item))
-                str_inject += '\n'
-                self.nextseq[mpname]+=1
+                str_inject += self._escape(str(item))
+            str_inject += '\n'
+            self.nextseq[mpname]+=1
         except TypeError:
             sys.stderr.write("ERROR\tInvalid measurement list\n")
             return
-
-        if self.oml:
+        # either inject it or display it
+        if self.oml and self.sock:
             try:
                 self.sock.send(to_bytes(str_inject))
             except:
                 sys.stderr.write("ERROR\tCould not send injected sample\n")
+                sys.stdout.write(str_inject)
         else:
             sys.stdout.write(str_inject)
-
-
-    def generate_guid(self):
-        guid = self.urandom.getrandbits(64)
-        while 0 == guid:
-            guid = self.urandom.getrandbits(64)
-        return guid
 
 
     def _disable_oml(self):
@@ -243,6 +239,21 @@ class OMLBase:
         Escape '\\', '\t', '\r' and '\n' characters in s
         """
         return s.replace('\\', r'\\').replace('\t', r'\t').replace('\r', r'\r').replace('\n', r'\n')
+
+
+    def _write_header(self):
+        if self.oml and self.sock:
+            header = "protocol: " + str(self.PROTOCOL) + '\n' + "domain: " + str(self.domain) + '\n' + \
+                "start-time: " + str(self.starttime) + '\n' + "sender-id: " + str(self.sender) + '\n' + \
+                "app-name: " + str(self.appname) + '\n' + \
+                str(self.schema) + '\n' + "content: text" + '\n' + '\n'    
+            try:
+                self.sock.send(to_bytes(header))
+            except socket.error as e:
+                sys.stderr.write("ERROR\tCould not connect to OML server: %s\n" %  e)
+                self._disable_oml()
+                sys.stdout.write(header)
+
 
 
 # Local Variables:
