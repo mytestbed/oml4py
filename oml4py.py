@@ -18,6 +18,7 @@
 
 import argparse
 import random
+import re
 import sys
 import os
 import socket
@@ -101,17 +102,17 @@ class OMLBase:
                 uri = "tcp:%s:%s" %(self.DEFAULT_HOST, self.DEFAULT_PORT)
             uri_l = uri.split(":")
 
-        if len(uri_l) == 1:       # host
+        if len(uri_l) == 1:     # host
             self.omlserver = uri_l[0]
             self.omlport = self.DEFAULT_PORT
         elif len(uri_l) == 2:
-            if uri_l[0] == "tcp":   # tcp:host or host:port
+            if uri_l[0] == "tcp": # tcp:host or host:port
                 self.omlserver = uri_l[1]
                 self.omlport = self.DEFAULT_PORT
             else:
                 self.omlserver = uri_l[0]
                 self.omlport = uri_l[1]
-        elif len(uri_l) == 3:       # tcp:host:port
+        elif len(uri_l) == 3:   # tcp:host:port
             self.omlserver = uri_l[1]
             self.omlport = uri_l[2]
             try:
@@ -136,46 +137,62 @@ class OMLBase:
         self.schema = ""
         self.nextseq = {}
         self.streamid = {}
+        self.fields = {}
+        self.metaseq = {}
         self.sock = None
 
 
     def addmp(self,mpname,schema):
- 
-      if "-" in mpname or "." in mpname:
-        sys.stderr.write("ERROR\tInvalid measurement point name: %s\n" %  mpname)
-        self._disable_oml()
-      else:
-        # Count number of streams
-        self.streams += 1
-        if self.streams > 1:
-           self.schema += '\n'
-        str_schema = "schema: " + str(self.streams) + " " + self.appname + "_" + mpname + " " + schema
-        self.schema += str_schema
-        self.nextseq[mpname] = 0
-        self.streamid[mpname] = self.streams
-        self._write_header()
+       if "-" in mpname or "." in mpname:
+           sys.stderr.write("ERROR\tInvalid measurement point name: %s\n" %  mpname)
+           self._disable_oml()
+           return
+       # remember field names
+       fs = set()
+       names = re.findall("[A-Za-z_][A-Za-z0-9_]+(?=:[A-Za-z_][A-Za-z0-9_]+)", schema)
+       for n in names:
+           fs.add(n)
+       self.fields[mpname] = fs
+       # update the server
+       if self.sock is None:
+           self.streams += 1
+           if self.streams > 1:
+               self.schema += '\n'
+           str_schema = "schema: " + str(self.streams) + " " + self.appname + "_" + mpname + " " + schema
+           self.schema += str_schema
+           self.nextseq[mpname] = 0
+           self.metaseq[mpname] = 0
+           self.streamid[mpname] = self.streams
+       else:
+           # now use schema 0 to send modified schema contents...
+           junk = 0
 
 
     def start(self):
-      if self.oml:
-          if self.sock is None:
-              # Use socket to connect to OML server
-              sys.stderr.write("INFO\tCollection URI is tcp:%s:%d\n" % (self.omlserver, self.omlport))
-              self.starttime = int(time())
-              try:
-                  self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                  self.sock.settimeout(5) 
-                  self.sock.connect((self.omlserver,self.omlport))
-                  self.sock.settimeout(None)
-                  self._write_header()
-              except socket.error as e:
-                  sys.stderr.write("ERROR\tCould not connect to OML server: %s\n" %  e)
-                  self._disable_oml()
-                  sys.stdout.write(header)
-          else:
-              sys.stderr.write("WARN\tstart() called unexpectedly\n")
-      else:
-        sys.stderr.write("WARN\tOML disabled\n")
+        if self.oml:
+            if self.sock is None:
+                # create header
+                header = "protocol: " + str(self.PROTOCOL) + '\n' + "domain: " + str(self.domain) + '\n' + \
+                    "start-time: " + str(self.starttime) + '\n' + "sender-id: " + str(self.sender) + '\n' + \
+                    "app-name: " + str(self.appname) + "\n" + \
+                    str(self.schema) + '\n' + "content: text" + '\n' + '\n'    
+                # Use socket to connect to OML server
+                sys.stderr.write("INFO\tCollection URI is tcp:%s:%d\n" % (self.omlserver, self.omlport))
+                self.starttime = int(time())
+                try:
+                    self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    self.sock.settimeout(5) 
+                    self.sock.connect((self.omlserver,self.omlport))
+                    self.sock.settimeout(None)
+                    self.sock.send(to_bytes(header))
+                except socket.error as e:
+                    sys.stderr.write("ERROR\tCould not connect to OML server: %s\n" %  e)
+                    self._disable_oml()
+                    sys.stdout.write(header)
+            else:
+                sys.stderr.write("ERROR\tstart() called unexpectedly\n")
+        else:
+            sys.stderr.write("WARN\tOML disabled\n")
 
 
     def close(self):
@@ -203,6 +220,7 @@ class OMLBase:
             streamid = self.streamid[mpname]
             seqno = self.nextseq[mpname]
             str_inject = str(timestamp) + '\t' + str(streamid) + '\t' + str(seqno)
+            self.nextseq[mpname]+=1
         except KeyError:
             sys.stderr.write("ERROR\tTried to inject into unknown MP '%s'\n" % mpname)
             return
@@ -212,7 +230,6 @@ class OMLBase:
                 str_inject += '\t'
                 str_inject += self._escape(str(item))
             str_inject += '\n'
-            self.nextseq[mpname]+=1
         except TypeError:
             sys.stderr.write("ERROR\tInvalid measurement list\n")
             return
@@ -222,6 +239,53 @@ class OMLBase:
                 self.sock.send(to_bytes(str_inject))
             except:
                 sys.stderr.write("ERROR\tCould not send injected sample\n")
+                sys.stdout.write(str_inject)
+        else:
+            sys.stdout.write(str_inject)
+
+
+    def inject_metadata(self,mpname,key,value,fname=None):
+        # check parameters
+        if self.oml and self.starttime == 0:
+            sys.stderr.write("ERROR\tDid not call start()\n")
+            return
+        elif key is None or value is None:
+            sys.stderr.write("ERROR\tMissing key or value\n")
+            return
+        elif self._is_valid_name(key):
+            sys.stderr.write("ERROR\t'%s' is not a valid metadata key name\n" % key)
+            return
+        elif self._is_valid_name(mpname):
+            sys.stderr.write("ERROR\t'%s' is not a valid MP name\n" % mpname)
+            return
+        # prepare the measurement info
+        str_inject = ""
+        timestamp = time() - self.starttime
+        try:
+            streamid = 0
+            seqno = self.metaseq[mpname]
+            str_inject = str(timestamp) + '\t' + str(streamid) + '\t' + str(seqno)
+            self.metaseq[mpname]+=1
+        except KeyError:
+            sys.stderr.write("ERROR\tTried to inject metadata into unknown MP '%s'\n" % mpname)
+            return
+        # prepare the metadata
+        subject = "."
+        if mpname:
+            subject += self.appname + "_" + mpname
+            if fname:
+                if fname in self.fields[mpname]:
+                    subject += "." + fname
+                else:
+                    sys.stderr.write("WARN\tField '%s' not found in MP '%s', not reporting\n" % (fname, mpname))
+                    return
+        str_inject += '\t' + subject + '\t' + str(key) + '\t' + self._escape(str(value)) + '\n'
+        # either inject it or display it
+        if self.oml and self.sock:
+            try:
+                self.sock.send(to_bytes(str_inject))
+            except:
+                sys.stderr.write("ERROR\tCould not send injected metadata\n")
                 sys.stdout.write(str_inject)
         else:
             sys.stdout.write(str_inject)
@@ -241,19 +305,8 @@ class OMLBase:
         return s.replace('\\', r'\\').replace('\t', r'\t').replace('\r', r'\r').replace('\n', r'\n')
 
 
-    def _write_header(self):
-        if self.oml and self.sock:
-            header = "protocol: " + str(self.PROTOCOL) + '\n' + "domain: " + str(self.domain) + '\n' + \
-                "start-time: " + str(self.starttime) + '\n' + "sender-id: " + str(self.sender) + '\n' + \
-                "app-name: " + str(self.appname) + '\n' + \
-                str(self.schema) + '\n' + "content: text" + '\n' + '\n'    
-            try:
-                self.sock.send(to_bytes(header))
-            except socket.error as e:
-                sys.stderr.write("ERROR\tCould not connect to OML server: %s\n" %  e)
-                self._disable_oml()
-                sys.stdout.write(header)
-
+    def _is_valid_name(self, name):
+        return re.match("[A-Za-z_]\([A-Za-z0-9_]\)*", name) is not None
 
 
 # Local Variables:
