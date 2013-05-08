@@ -140,32 +140,39 @@ class OMLBase:
         self.fields = {}
         self.metaseq = {}
         self.sock = None
+        self.addmp(None, "subject:string key:string value:string")
 
 
     def addmp(self,mpname,schema):
-       if "-" in mpname or "." in mpname:
-           sys.stderr.write("ERROR\tInvalid measurement point name: %s\n" %  mpname)
-           self._disable_oml()
-           return
-       # remember field names
-       fs = set()
-       names = re.findall("[A-Za-z_][A-Za-z0-9_]+(?=:[A-Za-z_][A-Za-z0-9_]+)", schema)
-       for n in names:
-           fs.add(n)
-       self.fields[mpname] = fs
-       # update the server
-       if self.sock is None:
-           self.streams += 1
-           if self.streams > 1:
-               self.schema += '\n'
-           str_schema = "schema: " + str(self.streams) + " " + self.appname + "_" + mpname + " " + schema
-           self.schema += str_schema
-           self.nextseq[mpname] = 0
-           self.metaseq[mpname] = 0
-           self.streamid[mpname] = self.streams
-       else:
-           # now use schema 0 to send modified schema contents...
-           junk = 0
+        if mpname and self._is_valid_name(mpname):
+            sys.stderr.write("ERROR\tInvalid measurement point name: %s\n" %  mpname)
+            self._disable_oml()
+            return
+        elif mpname in self.fields:
+            sys.stderr.write("ERROR\tAttempted to add an existing MP '%s'\n" %  mpname)
+            return
+        # remember field names
+        fs = set()
+        names = re.findall("[A-Za-z_][A-Za-z0-9_]+(?=:[A-Za-z_][A-Za-z0-9_]+)", schema)
+        for n in names:
+            fs.add(n)
+            self.fields[mpname] = fs
+        # update the schema definition
+        if self.streams > 0:
+            self.schema += '\n'
+        if mpname is None:
+            target = "_experiment_metadata"
+        else:
+            target = self.appname + "_" + mpname
+        str_schema = str(self.streams) + " " + target + " " + schema
+        self.schema += "schema: " + str_schema
+        self.nextseq[mpname] = 0
+        self.metaseq[mpname] = 0
+        self.streamid[mpname] = self.streams
+        self.streams += 1
+        # if we've already called start send schema update using schema 0
+        if self.starttime != 0:
+            self.inject_metadata(None, "schema", str_schema, None)
 
 
     def start(self):
@@ -176,7 +183,7 @@ class OMLBase:
                     "start-time: " + str(self.starttime) + '\n' + "sender-id: " + str(self.sender) + '\n' + \
                     "app-name: " + str(self.appname) + "\n" + \
                     str(self.schema) + '\n' + "content: text" + '\n' + '\n'    
-                # Use socket to connect to OML server
+                # connect to OML server
                 sys.stderr.write("INFO\tCollection URI is tcp:%s:%d\n" % (self.omlserver, self.omlport))
                 self.starttime = int(time())
                 try:
@@ -200,6 +207,7 @@ class OMLBase:
         if self.oml and self.sock:
             self.sock.close()
             self.sock = None;
+            self.starttime = 0
 
 
     def generate_guid(self):
@@ -220,7 +228,7 @@ class OMLBase:
             streamid = self.streamid[mpname]
             seqno = self.nextseq[mpname]
             str_inject = str(timestamp) + '\t' + str(streamid) + '\t' + str(seqno)
-            self.nextseq[mpname]+=1
+            self.nextseq[mpname] += 1
         except KeyError:
             sys.stderr.write("ERROR\tTried to inject into unknown MP '%s'\n" % mpname)
             return
@@ -255,7 +263,7 @@ class OMLBase:
         elif self._is_valid_name(key):
             sys.stderr.write("ERROR\t'%s' is not a valid metadata key name\n" % key)
             return
-        elif self._is_valid_name(mpname):
+        elif mpname and self._is_valid_name(mpname):
             sys.stderr.write("ERROR\t'%s' is not a valid MP name\n" % mpname)
             return
         # prepare the measurement info
@@ -265,14 +273,15 @@ class OMLBase:
             streamid = 0
             seqno = self.metaseq[mpname]
             str_inject = str(timestamp) + '\t' + str(streamid) + '\t' + str(seqno)
-            self.metaseq[mpname]+=1
+            self.metaseq[mpname] += 1
         except KeyError:
             sys.stderr.write("ERROR\tTried to inject metadata into unknown MP '%s'\n" % mpname)
             return
         # prepare the metadata
         subject = "."
         if mpname:
-            subject += self.appname + "_" + mpname
+            target = self.appname + "_" + mpname
+            subject += target
             if fname:
                 if fname in self.fields[mpname]:
                     subject += "." + fname
@@ -299,9 +308,6 @@ class OMLBase:
 
 
     def _escape(self, s) :
-        """
-        Escape '\\', '\t', '\r' and '\n' characters in s
-        """
         return s.replace('\\', r'\\').replace('\t', r'\t').replace('\r', r'\r').replace('\n', r'\n')
 
 
