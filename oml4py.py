@@ -40,8 +40,8 @@ class OMLBase:
     This is a Python OML class
     """
 
-    VERSION = "@VERSION@"
-    VERSION_STRING = ("OML4Py Client V@VERSION@")
+    VERSION = "2.10.0"
+    VERSION_STRING = ("OML4Py Client V2.10.0")
     COPYRIGHT = "Copyright 2012, NYU-Poly, Fraida Fund"
     PROTOCOL = 4
 
