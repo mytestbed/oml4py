@@ -100,7 +100,7 @@ class OMLBase:
                 sys.stderr.write("WARN\tOML_SERVER is deprecated; please use OML_COLLECT instead\n")
             else:
                 uri = "tcp:%s:%s" %(self.DEFAULT_HOST, self.DEFAULT_PORT)
-            uri_l = uri.split(":")
+        uri_l = uri.split(":")
 
         if len(uri_l) == 1:     # host
             self.omlserver = uri_l[0]
