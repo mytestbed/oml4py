@@ -1,6 +1,6 @@
 Metadata-Version: 1.0
 Name: oml4py
-Version: @VERSION@
+Version: v2.10.1
 Summary: An OML client module for Python
 Home-page: http://witestlab.poly.edu
 Author: Fraida Fund
