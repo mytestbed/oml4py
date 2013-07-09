@@ -1,6 +1,6 @@
 from distutils.core import setup
 setup(name='oml4py',
-      version='$$VERSION$$',
+      version='v2.10.2',
       author = "Fraida Fund",
       author_email = "ffund01@students.poly.edu",
       maintainer_email = "oml-user@lists.nicta.com.au",
