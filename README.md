@@ -67,7 +67,10 @@ be in the format
 ``measurement_name1:measurement_type1 measurement_name2:measurement_type2``
 for example::
 
-    x.addmp("fft", "freq:long amplitude:double fft_val:double")
+    x.addmp("fft", "freq:uint64 amplitude:double fft_val:double")
+
+Where the measurement_typeN is one of: "int32", "uint32", "int64",
+"uint64", "double" or "string".
 
 When you have set up all your measurement points, call start()::
 
