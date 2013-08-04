@@ -70,7 +70,7 @@ for example::
     x.addmp("fft", "freq:uint64 amplitude:double fft_val:double")
 
 Where the measurement_typeN is one of: "int32", "uint32", "int64",
-"uint64", "double" or "string".
+"uint64", "double", "string" or "bool".
 
 When you have set up all your measurement points, call start()::
 
