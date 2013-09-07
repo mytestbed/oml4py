@@ -22,8 +22,9 @@ import re
 import sys
 import os
 import socket
-from time import time
+from base64 import b64encode
 from time import sleep
+from time import time
 
 
 # Compatibility with Python 2 and 3's string type
@@ -36,283 +37,595 @@ else:
 
 
 class OMLBase:
+
     """
-    This is a Python OML class
+    This is an OML client implemtned as a Python class
     """
 
     VERSION = "@VERSION@"
     VERSION_STRING = ("OML4Py Client V@VERSION@")
-    COPYRIGHT = "Copyright 2012, NYU-Poly, Fraida Fund"
+    COPYRIGHT = "Copyright 2012, NYU-Poly, Fraida Fund,"
     PROTOCOL = 4
 
     DEFAULT_HOST="localhost"
     DEFAULT_PORT=3003
 
+    _args = None
 
-    def _banner(self):
-        sys.stderr.write("INFO\t%s [Protocol V%d] %s\n" % (self.VERSION_STRING, self.PROTOCOL, self.COPYRIGHT))
+    # constants for controlling error messages
+    #
+    ALL = 3
+    ERROR = 3
+    WARNING = 2
+    INFO = 1
+    NONE = 0
+
+    _log = ALL
 
 
-    def __init__(self,appname,domain=None,sender=None,uri=None,expid=None):
-        self._banner()
-        self.oml = True
-        self.urandom = random.SystemRandom()
+    # Initializer 
+    #
+    def __init__(self, appname, domain=None, sender=None, uri=None, expid=None):
+
+        OMLBase._info("%s [Protocol V%d] %s" % (OMLBase.VERSION_STRING, OMLBase.PROTOCOL, OMLBase.COPYRIGHT))
 
         # process the command line
-        parser = argparse.ArgumentParser(prog=appname)
-        parser.add_argument("--oml-id", default=None, help="node identifier")
-        parser.add_argument("--oml-domain", default=None, help="experimental domain")
-        parser.add_argument("--oml-collect", default="localhost", help="URI for a remote collection point")
-        args = parser.parse_args()
+        if OMLBase._args is None:
+            parser = argparse.ArgumentParser(prog=appname)
+            parser.add_argument("--oml-id", default=None, help="node identifier")
+            parser.add_argument("--oml-domain", default=None, help="experimental domain")
+            parser.add_argument("--oml-collect", default="localhost", help="URI for a remote collection point")
+            OMLBase._args = parser.parse_args()
 
-        # Set all the instance variables
-        self.appname = appname
-        if self.appname[:1].isdigit() or '-' in self.appname or '.' in self.appname:
-            sys.stderr.write("ERROR\tInvalid app name: %s\n" %  self.appname)
-            self._disable_oml()
+        # setup instance variables
+        self._state = "DISCONNECTED"
+        self._sock = None
+        self._starttime = 0
+        self._streams = 0
+        self._schemas = {}
+        self._schema_str = ""
+        self._urandom = random.SystemRandom()
+        self._has_valid_connection_attrs = True
 
-        if expid is not None:
-            sys.stderr.write("WARN\t%s parameter 'expid' is deprecated; please use 'domain' instead\n" % self.__class__.__name__)
+        # set the connection details
+        self._appname = appname
+        if self._appname[:1].isdigit() or '-' in self._appname or '.' in self._appname:
+            OMLBase._error("Invalid app name: %s" %  self._appname)
+            self._has_valid_connection_attrs = False
 
-        if domain is None:
-            domain = expid
+        if expid:
+            OMLBase._warning("%s parameter 'expid' is deprecated; please use 'domain' instead" % self.__class__.__name__)
 
-        if domain is not None:
-            self.domain = domain
-        elif args.oml_domain is not None:
-            self.domain = args.oml_domain
-        elif 'OML_DOMAIN' in os.environ.keys():
-            self.domain = os.environ['OML_DOMAIN']
-        elif 'OML_EXP_ID' in os.environ.keys():
-            self.domain = os.environ['OML_EXP_ID']
-            sys.stderr.write("WARN\tOML_EXP_ID is deprecated; please use OML_DOMAIN instead\n")
-        else:
-            sys.stderr.write("ERROR\tNo experimental domain specified\n")
-            self._disable_oml()
+        self._oml_domain = OMLBase._init_from(domain or expid, "oml_domain", "OML_DOMAIN", "OML_EXP_ID", None)
+        self._oml_id = OMLBase._init_from(sender, "oml_id", "OML_NAME", None, None)
+        default_uri =  "tcp:%s:%s" %(OMLBase.DEFAULT_HOST, OMLBase.DEFAULT_PORT)
+        uri = OMLBase._init_from(uri, "oml_collect", "OML_COLLECT", "OML_SERVER", default_uri)
 
-        if uri is None:
-            if args.oml_collect is not None:
-                uri = args.oml_collect
-            elif 'OML_COLLECT' in os.environ.keys():
-                uri = os.environ['OML_COLLECT']
-            elif 'OML_SERVER' in os.environ.keys():
-                uri = os.environ['OML_SERVER']
-                sys.stderr.write("WARN\tOML_SERVER is deprecated; please use OML_COLLECT instead\n")
-            else:
-                uri = "tcp:%s:%s" %(self.DEFAULT_HOST, self.DEFAULT_PORT)
+        # parse URI
         uri_l = uri.split(":")
-
-        if len(uri_l) == 1:     # host
-            self.omlserver = uri_l[0]
-            self.omlport = self.DEFAULT_PORT
+        if len(uri_l) == 1:
+            # host
+            self._omlserver = uri_l[0]
+            self._omlport = self.DEFAULT_PORT
         elif len(uri_l) == 2:
-            if uri_l[0] == "tcp": # tcp:host or host:port
-                self.omlserver = uri_l[1]
-                self.omlport = self.DEFAULT_PORT
+            if uri_l[0] == "tcp":
+                # tcp:host
+                self._omlserver = uri_l[1]
+                self._omlport = self.DEFAULT_PORT
             else:
-                self.omlserver = uri_l[0]
-                self.omlport = uri_l[1]
-        elif len(uri_l) == 3:   # tcp:host:port
-            self.omlserver = uri_l[1]
-            self.omlport = uri_l[2]
-            try:
-                self.omlport = int(self.omlport)
-            except ValueError:
-                sys.stderr.write("ERROR\tCannot use '%s' as a port number\n" % self.omlport)
-                self._disable_oml()
-
-        if sender is not None:
-            self.sender = sender
-        elif args.oml_id is not None:
-            self.sender = args.oml_id
+                # host:port
+                self._omlserver = uri_l[0]
+                self._omlport = uri_l[1]
+        elif len(uri_l) == 3:
+            # tcp:host:port
+            self._omlserver = uri_l[1]
+            self._omlport = uri_l[2]
         else:
-            try:
-                self.sender =  os.environ['OML_NAME']
-            except KeyError:
-                sys.stderr.write("ERROR\tNo sender ID specified (OML_NAME)\n")
-                self._disable_oml()
+            OMLBase._error("'%s' is not a valid OML server URI" % uri)
+            self._has_valid_connection_attrs = False
 
-        self.starttime = 0
-        self.streams = 0
-        self.schema = ""
-        self.nextseq = {}
-        self.streamid = {}
-        self.fields = {}
-        self.metaseq = {}
-        self.sock = None
-        self.addmp(None, "subject:string key:string value:string")
+        # check port number is valid
+        try:
+            self._omlport = int(self._omlport)
+            if not (0 <= self._omlport and self._omlport <= 65535):               
+                OMLBase._error("Invalid port number '%d'" % self._omlport)
+                self._has_valid_connection_attrs = False
+        except ValueError:
+            OMLBase._error("Cannot use '%s' as a port number" % self._omlport)
+            self._has_valid_connection_attrs = False
 
-
-    def addmp(self,mpname,schema):
-        if mpname and self._is_valid_name(mpname):
-            sys.stderr.write("ERROR\tInvalid measurement point name: %s\n" %  mpname)
-            self._disable_oml()
-            return
-        elif mpname in self.fields:
-            sys.stderr.write("ERROR\tAttempted to add an existing MP '%s'\n" %  mpname)
-            return
-        # remember field names
-        fs = set()
-        names = re.findall("[A-Za-z_][A-Za-z0-9_]+(?=:[A-Za-z_][A-Za-z0-9_]+)", schema)
-        for n in names:
-            fs.add(n)
-            self.fields[mpname] = fs
-        # update the schema definition
-        if self.streams > 0:
-            self.schema += '\n'
-        if mpname is None:
-            target = "_experiment_metadata"
-        else:
-            target = self.appname + "_" + mpname
-        str_schema = str(self.streams) + " " + target + " " + schema
-        self.schema += "schema: " + str_schema
-        self.nextseq[mpname] = 0
-        self.metaseq[mpname] = 0
-        self.streamid[mpname] = self.streams
-        self.streams += 1
-        # if we've already called start send schema update using schema 0
-        if self.starttime != 0:
-            self.inject_metadata(None, "schema", str_schema, None)
+        # register metadata schema (aka schema 0)
+        self._add_schema("_experiment_metadata", "subject:string key:string value:string")
 
 
+    # Start a connection with the OML server
+    #
     def start(self):
-        if self.oml:
-            if self.sock is None:
-                # create header
-                header = "protocol: " + str(self.PROTOCOL) + '\n' + "domain: " + str(self.domain) + '\n' + \
-                    "start-time: " + str(self.starttime) + '\n' + "sender-id: " + str(self.sender) + '\n' + \
-                    "app-name: " + str(self.appname) + "\n" + \
-                    str(self.schema) + '\n' + "content: text" + '\n' + '\n'    
-                # connect to OML server
-                sys.stderr.write("INFO\tCollection URI is tcp:%s:%d\n" % (self.omlserver, self.omlport))
-                self.starttime = int(time())
-                try:
-                    self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    self.sock.settimeout(5) 
-                    self.sock.connect((self.omlserver,self.omlport))
-                    self.sock.settimeout(None)
-                    self.sock.send(to_bytes(header))
-                except socket.error as e:
-                    sys.stderr.write("ERROR\tCould not connect to OML server: %s\n" %  e)
-                    self._disable_oml()
-                    sys.stdout.write(header)
+        if self._state == "DISCONNECTED" or self._state == "DISABLED":
+            if self._has_valid_connection_attrs and self._connect():
+                self._state = "CONNECTED"
             else:
-                sys.stderr.write("ERROR\tstart() called unexpectedly\n")
+                self._state = "DISABLED"
+                OMLBase._warning("Disabling OML output")
         else:
-            sys.stderr.write("WARN\tOML disabled\n")
+            return OMLBase._error("start() called unexpectedly (state=%s)!" % (self._state))
+        return True
 
 
+    # Close the connection to the OML server
+    #
     def close(self):
-        self.streamid = None
-        if self.oml and self.sock:
-            self.sock.close()
-            self.sock = None;
-            self.starttime = 0
+        if self._state == "CONNECTED":
+            self._disconnect()
+            self._state = "DISCONNECTED"
+        elif self._state == "DISABLED":
+            self._state = "DISCONNECTED"
+        else:
+            return OMLBase._error("close() called when MP not started")
+        return True
 
 
+    # Generate a new GUID
+    #
     def generate_guid(self):
-        guid = self.urandom.getrandbits(64)
+        guid = self._urandom.getrandbits(64)
         while 0 == guid:
-            guid = self.urandom.getrandbits(64)
+            guid = self._urandom.getrandbits(64)
         return guid
 
 
-    def inject(self,mpname,values):
-        if self.oml and self.starttime == 0:
-            sys.stderr.write("ERROR\tDid not call start()\n")
-            self._disable_oml()
-        # prepare the measurement info
-        str_inject = ""
-        timestamp = time() - self.starttime
-        try:
-            streamid = self.streamid[mpname]
-            seqno = self.nextseq[mpname]
-            str_inject = str(timestamp) + '\t' + str(streamid) + '\t' + str(seqno)
-            self.nextseq[mpname] += 1
-        except KeyError:
-            sys.stderr.write("ERROR\tTried to inject into unknown MP '%s'\n" % mpname)
-            return
-        # prepare the measurement tuple
-        try:
-            for item in values:
-                str_inject += '\t'
-                str_inject += self._escape(str(item))
-            str_inject += '\n'
-        except TypeError:
-            sys.stderr.write("ERROR\tInvalid measurement list\n")
-            return
-        # either inject it or display it
-        if self.oml and self.sock:
-            try:
-                self.sock.send(to_bytes(str_inject))
-            except:
-                sys.stderr.write("ERROR\tCould not send injected sample\n")
-                sys.stdout.write(str_inject)
+    # Add a new measurement point 
+    #
+    def addmp(self, mpname, schema_str):
+        # check params
+        if mpname is None or not OMLBase._is_valid_name(mpname):
+            return OMLBase._error("Invalid measurement point name: %s" % mpname)
+        elif mpname in self._schemas:
+            return OMLBase._error("Attempted to add an existing MP '%s'" % mpname)
+        elif not self._is_valid_schema_str(schema_str.strip()):
+            return OMLBase._error("Invalid MP schema: %s" % schema_str.strip())
+        # process new MP
+        if self._state == "CONNECTED":
+            return self._add_schema(mpname, schema_str) and self._inject_schema(mpname)
+        if self._state == "DISABLED":
+            return self._add_schema(mpname, schema_str) and self._write_schema(mpname)
         else:
-            sys.stdout.write(str_inject)
+            return self._add_schema(mpname, schema_str)
 
 
-    def inject_metadata(self,mpname,key,value,fname=None):
+    # Inject a new measurement tuple
+    #
+    def inject(self, mpname, values):
+        # check params
+        if mpname is None or not OMLBase._is_valid_name(mpname):
+            return OMLBase._error("Invalid measurement point name '%s'" % mpname)
+        elif mpname not in self._schemas:
+            return OMLBase._error("Tried to inject into unknown MP '%s'" % mpname)
+        elif values is None:
+            return OMLBase._error("No measurement tuple")
+        # process injection request
+        if self._state == "CONNECTED":
+            return self._inject_measurement(mpname, values)
+        elif self._state == "DISABLED":
+            return self._write_measurement(mpname, values);
+        else:
+            return OMLBase._error("inject() called when in %s state" % self._state)
+
+
+    # Inject metadata
+    #
+    def inject_metadata(self, mpname, key, value, fname = None):
         # check parameters
-        if self.oml and self.starttime == 0:
-            sys.stderr.write("ERROR\tDid not call start()\n")
-            return
+        if mpname is None or not OMLBase._is_valid_name(mpname):
+            return OMLBase._error("Invalid measurement point name %s" % mpname)
+        elif mpname not in self._schemas:
+            return OMLBase._error("Tried to inject into unknown MP '%s'" % mpname)
         elif key is None or value is None:
-            sys.stderr.write("ERROR\tMissing key or value\n")
-            return
-        elif self._is_valid_name(key):
-            sys.stderr.write("ERROR\t'%s' is not a valid metadata key name\n" % key)
-            return
-        elif mpname and self._is_valid_name(mpname):
-            sys.stderr.write("ERROR\t'%s' is not a valid MP name\n" % mpname)
-            return
-        # prepare the measurement info
-        str_inject = ""
-        timestamp = time() - self.starttime
+            return OMLBase._error("Missing key or value")
+        elif not OMLBase._is_valid_name(key):
+            return OMLBase._error("'%s' is not a valid metadata key name\n" % key)
+        # process injection request
+        if self._state == "CONNECTED":
+            return self._inject_metadata(mpname, key, value, fname)
+        elif self._state == "DISABLED":
+            return self._write_metadata(mpname, key, value, fname);
+        else:
+            return OMLBase._error("Did not call start")
+
+
+    # state machine actions
+
+    # Connect to the OML server
+    # 
+    def _connect(self):
         try:
-            streamid = 0
-            seqno = self.metaseq[mpname]
-            str_inject = str(timestamp) + '\t' + str(streamid) + '\t' + str(seqno)
-            self.metaseq[mpname] += 1
-        except KeyError:
-            sys.stderr.write("ERROR\tTried to inject metadata into unknown MP '%s'\n" % mpname)
-            return
-        # prepare the metadata
+            OMLBase._info("Collection URI is tcp:%s:%d" % (self._omlserver, self._omlport))
+            # establish a connection
+            self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self._sock.settimeout(5) 
+            self._sock.connect((self._omlserver, self._omlport))
+            self._sock.shutdown(socket.SHUT_RD)
+            self._sock.settimeout(None)
+            # create and send header
+            header = "protocol: 4\n"
+            header += "domain: " + self._oml_domain + "\n"
+            header += "start-time: " + str(time()) + "\n"
+            header += "sender-id: " + self._oml_id + "\n"
+            header += "app-name: " + self._appname + "\n"
+            header += self._schema_str
+            header += "content: text\n\n"
+            self._sock.send(to_bytes(header))
+            self._starttime = int(time())
+            return True
+        except socket.error as ex:
+            return OMLBase._error("Could not connect to OML server: %s" %  str(ex))
+        except Exception as ex:
+            return OMLBase._error("Unexpected " + str(ex))
+
+    # Disconnect from the OML server
+    #
+    def _disconnect(self):
+        try:
+            self._sock.shutdown(socket.SHUT_WR)
+            self._sock.close()
+            self._sock = None
+            self._starttime = None
+            return True
+        except socket.error as ex:
+            return OMLBase._error("Could not disconnect cleanly from OML server: %s" %  str(ex))
+        except Exception as ex:
+            return OMLBase._error("Unexpected " + str(ex))
+
+
+    # Process MP schema
+    #
+    def _add_schema(self, mpname, schema_str):
+        # parse schema string
+        schema_str = schema_str.strip()
+        schema = re.findall("([A-Za-z_][A-Za-z0-9_]*):([A-Za-z_][A-Za-z0-9_]*)", schema_str)
+        names = set()
+        types = []
+        for s in schema:
+            name, type = s
+            # check name
+            name = name.lower()
+            if name not in names:
+                names.add(name)
+            else:
+                OMLBase._error("Duplicate field name: %s" % name)
+                return None
+            # check type
+            type = type.lower()
+            if not self._is_valid_type(type):
+                OMLBase._error("Invalid type for %s: %s" % (name, type))
+                return None
+        # update the schema definition
+        if mpname == "_experiment_metadata":
+            target = mpname
+        else:
+            target = self._appname + "_" + mpname
+        self._schema_str += "schema: " + str(self._streams) + " " + target + " " + schema_str + "\n"
+        self._schemas[mpname] = (self._streams, names, schema, schema_str, 0, 0)
+        self._streams += 1
+        return schema
+
+
+    # Inject a schema update using schema0
+    #
+    def _inject_schema(self, mpname):
+        inject_str = self._marshal_schema(mpname)
+        return self._inject_metadata("_experiment_metadata", "schema", inject_str, None)
+
+    # Inject a schema update using schema0
+    #
+    def _write_schema(self, mpname):
+        inject_str = self._marshal_schema(mpname)
+        return self._write_metadata("_experiment_metadata", "schema", inject_str, None)
+
+    # Marshal MP for insertion using schema0
+    #
+    def _marshal_schema(self, mpname):
+        stream, _, _, schema_str, _, _ = self._schemas[mpname]
+        inject_str = str(stream) + ' '
+        inject_str += self._appname + '_' + mpname + ' '
+        inject_str += schema_str
+        return inject_str
+
+    # Marshal and inject a measurement tuple
+    #
+    def _inject_measurement(self, mpname, values):
+        inject_str = self._marshal_measurement(mpname, values)
+        if inject_str:
+            try:
+                self._sock.send(to_bytes(inject_str))
+                return True
+            except:
+                return OMLBase._error("Could not send injected sample\n%s" % inject_str)
+        else:
+            return False
+
+
+    # Write measurement tuple to stdout
+    #
+    def _write_measurement(self, mpname, values):
+        inject_str = self._marshal_measurement(mpname, values)
+        if inject_str:
+            sys.stdout.write(inject_str)
+            return True
+        else:
+            return False
+
+
+    # Marshal a measurement tuple
+    #
+    def _marshal_measurement(self, mpname, values):
+        timestamp = time() - self._starttime
+        stream, names, schema, schema_str, seqno, meta_seqno = self._schemas[mpname]
+        self._schemas[mpname] = (stream, names, schema, schema_str, seqno+1, meta_seqno)
+        return self._marshal(timestamp, stream, seqno, schema, values)
+
+
+    # Marshal and inject a metadata tuple
+    #
+    def _inject_metadata(self, mpname, key, value, fname):
+        inject_str = self._marshal_metadata(mpname, key, value, fname)
+        if inject_str:
+            try:
+                self._sock.send(to_bytes(inject_str))
+                return True
+            except:
+                return OMLBase._error("Could not send injected metadata\n%s" % inject_str)
+        else:
+            return False
+
+
+    # Write metadata to stdout
+    #
+    def _write_metadata(self, mpname, key, value, fname):
+        inject_str = self._marshal_metadata(mpname, key, value, fname)
+        if inject_str:
+            sys.stdout.write(inject_str)
+            return True
+        else:
+            return False
+
+
+    # Marshal metadata
+    #
+    def _marshal_metadata(self, mpname, key, value, fname):
+        # get names, meta_seqno for MP
+        timestamp = time() - self._starttime
+        stream, names, schema, schema_str, seqno, meta_seqno = self._schemas[mpname]
+        self._schemas[mpname] = (stream, names, schema, schema_str, seqno, meta_seqno+1)
+        # get stream + schema from the schema 0 MP
+        stream, _, schema, _, _, _ = self._schemas["_experiment_metadata"]
+        # setup the subject
         subject = "."
-        if mpname:
-            target = self.appname + "_" + mpname
+        if mpname == "_experiment_metadata":
+            target = mpname
+        else:
+            target = self._appname + "_" + mpname
             subject += target
             if fname:
-                if fname in self.fields[mpname]:
+                if fname in names:
                     subject += "." + fname
                 else:
-                    sys.stderr.write("WARN\tField '%s' not found in MP '%s', not reporting\n" % (fname, mpname))
-                    return
-        str_inject += '\t' + subject + '\t' + str(key) + '\t' + self._escape(str(value)) + '\n'
-        # either inject it or display it
-        if self.oml and self.sock:
+                    OMLBase._error("Field '%s' not found in MP '%s', not reporting" % (fname, mpname))
+                    return None
+        return self._marshal(timestamp, stream, meta_seqno, schema, [subject, key, value])
+
+
+    # Marshal measurement/metadata values
+    #
+    def _marshal(self, timestamp, stream, seqno, schema, values):
+        # ensure we have enough values in tuple
+        if len(schema) != len(values):
+            OMLBase._error("Measurement tuple (%s) does not match schema (%s)" % (values, schema))
+            return None
+        # prepare the measurement tuple
+        inject_str = str(timestamp) + '\t' + str(stream) + '\t' + str(seqno)
+        i = 0
+        for s in schema:
+            name, type = s
+            item = values[i]
+            i += 1
             try:
-                self.sock.send(to_bytes(str_inject))
-            except:
-                sys.stderr.write("ERROR\tCould not send injected metadata\n")
-                sys.stdout.write(str_inject)
+                if "int32" == type:
+                    inject_str += '\t'
+                    x = int(item)
+                    if not (-2147483648 <= x and x <= 2147483647):
+                        OMLBase._error("Value %d out of range for %s:%s" % (x, name, type))
+                        return None
+                    inject_str += str(x)
+                elif "uint32" == type:
+                    inject_str += '\t'
+                    x = int(item)
+                    if not (0 <= x and x <= 4294967296):
+                        OMLBase._error("Value %d out of range for %s:%s" % (x, name, type))
+                        return None
+                    inject_str += str(x)
+                elif "int64" == type:
+                    inject_str += '\t'
+                    x = int(item)
+                    if not (-9223372036854775808 <= x and x <= 9223372036854775807):
+                        OMLBase._error("Value %d out of range for %s:%s" % (x, name, type))
+                        return None
+                    inject_str += str(x)
+                elif "uint64" == type or "guid" == type:
+                    inject_str += '\t'
+                    x = int(item)
+                    if not (0 <= x and x <= 18446744073709551616):
+                        OMLBase._error("Value %d out of range for %s:%s" % (x, name, type))
+                        return None
+                    inject_str += str(x)
+                elif "bool" == type:
+                    inject_str += '\t'
+                    x = bool(item)
+                    inject_str += str(x)
+                elif "double" == type:
+                    inject_str += '\t'
+                    x = float(item)
+                    inject_str += str(x)
+                elif "blob" == type:
+                    inject_str += '\t'
+                    inject_str += base64.b64encode(item);
+                elif "string" == type:
+                    inject_str += '\t'
+                    inject_str += OMLBase._escape(str(item))
+                else:
+                    OMLBase._error("Unknown type for %s:%s" % (name, type))
+                    return None
+            except TypeError:
+                OMLBase._error("Illegal type '%s' for %s:%s" % (item, name, type))
+                return None
+            except ValueError:
+                OMLBase._error("Illegal value '%s' for %s:%s" % (item, name, type))
+                return None
+        # finish up
+        inject_str += '\n'
+        return inject_str
+
+
+    # utilities
+
+    # Set the log level for printed messages
+    #
+    @staticmethod
+    def set_log_level(level):
+        if OMLBase.NONE <= level and level <= OMLBase.ALL:
+            OMLBase._log = level
         else:
-            sys.stdout.write(str_inject)
+            OMLBase._log = OMLBase.ALL
 
 
-    def _disable_oml(self):
-        if not self.oml:
-            return
-        sys.stderr.write("WARN\tDisabling OML output\n")
-        self.oml = False
+    # Report an informational message
+    #
+    @staticmethod
+    def _info(msg):
+        if OMLBase.INFO <= OMLBase._log:
+            sys.stderr.write("INFO\t%s\n" % msg)
 
 
-    def _escape(self, s) :
+    # Report a warning message
+    #
+    @staticmethod
+    def _warning(msg):
+        if OMLBase.WARNING <= OMLBase._log:
+            sys.stderr.write("WARN\t%s\n" % msg)
+
+
+    # Report an error
+    #
+    @staticmethod
+    def _error(msg):
+        if OMLBase.ERROR <= OMLBase._log:
+            sys.stderr.write("ERROR\t%s\n" % msg)
+        return False
+
+
+    # Initialization helper function
+    #
+    @staticmethod
+    def _init_from(param, arg, env, depr, default):
+        if param:
+            return param
+        elif arg in OMLBase._args.__dict__:
+            return OMLBase._args.__dict__[arg]
+        elif env in os.environ.keys():
+            return os.environ[env]
+        elif depr and depr in os.environ.keys():
+            OMLBase._warning("%s is deprecated; please use %s instead" % (depr, env))
+            return os.environ[depr]
+        elif default:
+            return default
+        else:
+            OMLBase._error("No %s specified" % arg)
+            return None
+
+
+    # Tests if t is a valid typename
+    #
+    @staticmethod
+    def _is_valid_type(t):
+        return OMLBase._is_valid_scalar_type(t) # or OMLBase._is_valid_vector_type(t)
+
+
+    # Tests if t is a valid scalar typename
+    #
+    @staticmethod
+    def _is_valid_scalar_type(t):
+        return t in ("bool", "int32", "uint32", "int64", "uint64", "double", "string", "blob", "guid")
+
+
+    # Tests if t is a valid vector typename
+    #
+    # @staticmethod
+    # def _is_valid_vector_type():
+    #     return t in ("[bool]", "[int32]", "[uint32]", "[int64]", "[uint64]")
+
+    # Escape backslashes, tabs and carriage returns and newlines in s
+    #
+    @staticmethod
+    def _escape(s) :
         return s.replace('\\', r'\\').replace('\t', r'\t').replace('\r', r'\r').replace('\n', r'\n')
 
 
-    def _is_valid_name(self, name):
-        return re.match("[A-Za-z_]\([A-Za-z0-9_]\)*", name) is not None
+    # Tests that name is valid
+    #
+    @staticmethod
+    def _is_valid_name(name):
+        return re.match("[A-Za-z_][A-Za-z0-9_]*", name) is not None
+
+
+    # Tests that appname is valid
+    #
+    @staticmethod
+    def _is_valid_appname(appname):
+        p = "^[A-Za-z][A-Za-z0-9_]*$"
+        return re.match(p, appname) is not None
+
+
+    # Tests that schema is valid
+    #
+    @staticmethod
+    def _is_valid_schema_str(schema_str):
+        p="^[A-Za-z_][A-Za-z_0-9]*:[A-Za-z_][A-Za-z_0-9]*( +[A-Za-z_][A-Za-z_0-9]*:[A-Za-z_][A-Za-z_0-9]*)*$"
+        return re.match(p, schema_str) is not None
+
+
+def _selftest():
+    b = OMLBase("testing")
+    b.addmp("example1", "i32:int32")
+    b.start()
+
+    b.inject_metadata("example1", "units", "Hz", "i32")
+    b.inject("example1", [-2147483648])
+
+    b.addmp("example2", "i64:int64")
+    b.inject("example2", [-9223372036854775807])
+    b.inject("example2", [-4294967296])
+    b.inject_metadata("example2", "units", "Centimes", "i64")
+
+    b.close()
+    b.start()
+
+    b.inject("example1", [0])
+    b.inject("example1", [2147483647])
+
+    b.inject("example2", [0])
+    b.inject("example2", [4294967295])
+    b.inject("example2", [9223372036854775806])
+
+    b.addmp("example3", "u32:uint32")
+    b.inject_metadata("example3", "units", "Ducks", "u32")
+    b.inject("example2", [0])
+    b.inject("example2", [4294967295])
+
+    b.close()
+
+
+if __name__ == '__main__':
+    _selftest()
 
 
 # Local Variables:

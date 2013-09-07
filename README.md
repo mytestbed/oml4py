@@ -70,7 +70,7 @@ for example::
     x.addmp("fft", "freq:uint64 amplitude:double fft_val:double")
 
 Where the measurement_typeN is one of: "int32", "uint32", "int64",
-"uint64", "double", "string" or "bool".
+"uint64", "double", "string", "bool" or "blob".
 
 When you have set up all your measurement points, call start()::
 
@@ -81,6 +81,12 @@ tuple Then pass the name of the measurement point and the tuple of
 values to inject, as follows::
 
     x.inject("fft", (259888, 15, -38))
+
+When injecting a tuple the values you provide are converted to text
+representation using python's str() conversion for all types except
+"blob". An argument of type blob will be passed to the
+base64.b64encode() method and so the argument must be either a byte
+array or a string; any other type may cause a TypeError.
 
 At the end of your program, call close to gracefully close the database::
 
