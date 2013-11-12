@@ -42,7 +42,7 @@ class OMLBase:
 
     VERSION = "v2.10.2"
     VERSION_STRING = ("OML4Py Client v2.10.2")
-    COPYRIGHT = "Copyright 2012, NYU-Poly, Fraida Fund"
+    COPYRIGHT = "Copyright 2012, NYU-Poly, Fraida Fund, 2012-2013 NICTA"
     PROTOCOL = 4
 
     DEFAULT_HOST = "localhost"
