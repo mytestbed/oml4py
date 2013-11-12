@@ -1,3 +1,5 @@
+#!/bin/env python
+
 from distutils.core import setup
 setup(name='oml4py',
       version='2.10.3',
@@ -14,5 +16,5 @@ setup(name='oml4py',
           'Operating System :: OS Independent',
           'Topic :: Scientific/Engineering',
       ],
-      long_description=open('README.txt', 'rt').read(),
+      long_description=open('README.md', 'rt').read(),
       )
