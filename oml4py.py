@@ -65,7 +65,8 @@ class OMLBase:
             parser.add_argument("--oml-id", default=None, help="node identifier")
             parser.add_argument("--oml-domain", default=None, help="experimental domain")
             parser.add_argument("--oml-collect", default=None, help="URI for a remote collection point")
-            self.args, sys.argv = parser.parse_known_args()
+            newargv = [sys.argv[0]]
+            self.args, sys.argv[1:] = parser.parse_known_args()
 
         # Set all the instance variables
         self.appname = appname
