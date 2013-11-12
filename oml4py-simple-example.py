@@ -31,7 +31,7 @@ import oml4py
 import time
 import math
 
-omlInst = oml4py.OMLBase("oml4PySimpleExample", "foo", "n1", "tcp:localhost:3003")
+omlInst = oml4py.OMLBase("oml4PySimpleExample", "foo", "n1")
 
 omlInst.addmp("SinMP", "label:string angle:int32 value:double")
 omlInst.addmp("CosMP", "label:string value:double")

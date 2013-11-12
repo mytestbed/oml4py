@@ -25,6 +25,7 @@ import socket
 from time import time
 from time import sleep
 
+__version__ = "2.10.3"
 
 # Compatibility with Python 2 and 3's string type
 if float(sys.version[:3])<3:
@@ -40,9 +41,9 @@ class OMLBase:
     This is a Python OML class
     """
 
-    VERSION = "v2.10.2"
-    VERSION_STRING = ("OML4Py Client v2.10.2")
-    COPYRIGHT = "Copyright 2012, NYU-Poly, Fraida Fund"
+    VERSION = __version__ # XXX: Backward compatibility
+    VERSION_STRING = ("OML4Py Client %s" % (__version__,))
+    COPYRIGHT = "Copyright 2012, NYU-Poly, Fraida Fund, 2012-2013 NICTA"
     PROTOCOL = 4
 
     DEFAULT_HOST = "localhost"
