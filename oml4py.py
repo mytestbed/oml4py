@@ -40,14 +40,15 @@ class OMLBase:
     This is a Python OML class
     """
 
-    VERSION = "@VERSION@"
-    VERSION_STRING = ("OML4Py Client V@VERSION@")
+    VERSION = "v2.10.2"
+    VERSION_STRING = ("OML4Py Client v2.10.2")
     COPYRIGHT = "Copyright 2012, NYU-Poly, Fraida Fund"
     PROTOCOL = 4
 
-    DEFAULT_HOST="localhost"
-    DEFAULT_PORT=3003
+    DEFAULT_HOST = "localhost"
+    DEFAULT_PORT = 3003
 
+    args = None
 
     def _banner(self):
         sys.stderr.write("INFO\t%s [Protocol V%d] %s\n" % (self.VERSION_STRING, self.PROTOCOL, self.COPYRIGHT))
@@ -58,12 +59,14 @@ class OMLBase:
         self.oml = True
         self.urandom = random.SystemRandom()
 
-        # process the command line
-        parser = argparse.ArgumentParser(prog=appname)
-        parser.add_argument("--oml-id", default=None, help="node identifier")
-        parser.add_argument("--oml-domain", default=None, help="experimental domain")
-        parser.add_argument("--oml-collect", default="localhost", help="URI for a remote collection point")
-        args = parser.parse_args()
+        # process the command line and consume OML arguments
+        if self.args is None:
+            parser = argparse.ArgumentParser(prog=appname)
+            parser.add_argument("--oml-id", default=None, help="node identifier")
+            parser.add_argument("--oml-domain", default=None, help="experimental domain")
+            parser.add_argument("--oml-collect", default=None, help="URI for a remote collection point")
+            newargv = [sys.argv[0]]
+            self.args, sys.argv[1:] = parser.parse_known_args()
 
         # Set all the instance variables
         self.appname = appname
@@ -79,8 +82,8 @@ class OMLBase:
 
         if domain is not None:
             self.domain = domain
-        elif args.oml_domain is not None:
-            self.domain = args.oml_domain
+        elif self.args.oml_domain is not None:
+            self.domain = self.args.oml_domain
         elif 'OML_DOMAIN' in os.environ.keys():
             self.domain = os.environ['OML_DOMAIN']
         elif 'OML_EXP_ID' in os.environ.keys():
@@ -91,8 +94,8 @@ class OMLBase:
             self._disable_oml()
 
         if uri is None:
-            if args.oml_collect is not None:
-                uri = args.oml_collect
+            if self.args.oml_collect is not None:
+                uri = self.args.oml_collect
             elif 'OML_COLLECT' in os.environ.keys():
                 uri = os.environ['OML_COLLECT']
             elif 'OML_SERVER' in os.environ.keys():
@@ -123,8 +126,8 @@ class OMLBase:
 
         if sender is not None:
             self.sender = sender
-        elif args.oml_id is not None:
-            self.sender = args.oml_id
+        elif self.args.oml_id is not None:
+            self.sender = self.args.oml_id
         else:
             try:
                 self.sender =  os.environ['OML_NAME']
