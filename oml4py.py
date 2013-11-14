@@ -52,7 +52,7 @@ class OMLBase:
     args = None
 
     def _banner(self):
-        sys.stderr.write("INFO\t%s [Protocol V%d] %s\n" % (self.VERSION_STRING, self.PROTOCOL, self.COPYRIGHT))
+        sys.stderr.write("INFO\t%s [OMSPv%d; Python %s] %s\n" % (self.VERSION_STRING, self.PROTOCOL, sys.version.split(" ")[0], self.COPYRIGHT))
 
 
     def __init__(self,appname,domain=None,sender=None,uri=None,expid=None):
