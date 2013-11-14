@@ -182,6 +182,7 @@ class OMLBase:
     def start(self):
         if self.oml:
             if self.sock is None:
+                self.starttime = int(time())
                 # create header
                 header = "protocol: " + str(self.PROTOCOL) + '\n' + "domain: " + str(self.domain) + '\n' + \
                     "start-time: " + str(self.starttime) + '\n' + "sender-id: " + str(self.sender) + '\n' + \
@@ -189,7 +190,6 @@ class OMLBase:
                     str(self.schema) + '\n' + "content: text" + '\n' + '\n'    
                 # connect to OML server
                 sys.stderr.write("INFO\tCollection URI is tcp:%s:%d\n" % (self.omlserver, self.omlport))
-                self.starttime = int(time())
                 try:
                     self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     self.sock.settimeout(5) 
