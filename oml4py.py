@@ -80,7 +80,7 @@ class OMLBase:
         # setup instance variables
         self._state = "DISCONNECTED"
         self._sock = None
-        self._starttime = 0
+        self._starttime = None
         self._streams = 0
         self._schemas = {}
         self._schema_str = ""
@@ -96,9 +96,9 @@ class OMLBase:
         if expid:
             OMLBase._warning("%s parameter 'expid' is deprecated; please use 'domain' instead" % self.__class__.__name__)
 
-        self._oml_domain = OMLBase._init_from(domain or expid, "oml_domain", "OML_DOMAIN", "OML_EXP_ID", None)
-        self._oml_id = OMLBase._init_from(sender, "oml_id", "OML_NAME", None, None)
-        default_uri =  "tcp:%s:%s" %(OMLBase.DEFAULT_HOST, OMLBase.DEFAULT_PORT)
+        self._oml_domain = OMLBase._init_from(domain or expid, "oml_domain", "OML_DOMAIN", "OML_EXP_ID", "UNKNOWN")
+        self._oml_id = OMLBase._init_from(sender, "oml_id", "OML_ID", "OML_NAME", "UNKNOWN")
+        default_uri =  "tcp:%s:%d" %(OMLBase.DEFAULT_HOST, OMLBase.DEFAULT_PORT)
         uri = OMLBase._init_from(uri, "oml_collect", "OML_COLLECT", "OML_SERVER", default_uri)
 
         # parse URI
@@ -147,6 +147,7 @@ class OMLBase:
             else:
                 self._state = "DISABLED"
                 OMLBase._warning("Disabling OML output")
+            self._starttime = int(time())
         else:
             return OMLBase._error("start() called unexpectedly (state=%s)!" % (self._state))
         return True
@@ -162,6 +163,7 @@ class OMLBase:
             self._state = "DISCONNECTED"
         else:
             return OMLBase._error("close() called when MP not started")
+        self._starttime = None
         return True
 
 
@@ -255,7 +257,6 @@ class OMLBase:
             header += self._schema_str
             header += "content: text\n\n"
             self._sock.send(to_bytes(header))
-            self._starttime = int(time())
             return True
         except socket.error as ex:
             return OMLBase._error("Could not connect to OML server: %s" %  str(ex))
@@ -269,7 +270,6 @@ class OMLBase:
             self._sock.shutdown(socket.SHUT_WR)
             self._sock.close()
             self._sock = None
-            self._starttime = None
             return True
         except socket.error as ex:
             return OMLBase._error("Could not disconnect cleanly from OML server: %s" %  str(ex))
@@ -305,7 +305,7 @@ class OMLBase:
         else:
             target = self._appname + "_" + mpname
         self._schema_str += "schema: " + str(self._streams) + " " + target + " " + schema_str + "\n"
-        self._schemas[mpname] = (self._streams, names, schema, schema_str, 0, 0)
+        self._schemas[mpname] = (self._streams, names, schema, schema_str, 0)
         self._streams += 1
         return schema
 
@@ -325,7 +325,7 @@ class OMLBase:
     # Marshal MP for insertion using schema0
     #
     def _marshal_schema(self, mpname):
-        stream, _, _, schema_str, _, _ = self._schemas[mpname]
+        stream, _, _, schema_str, _ = self._schemas[mpname]
         inject_str = str(stream) + ' '
         inject_str += self._appname + '_' + mpname + ' '
         inject_str += schema_str
@@ -360,8 +360,8 @@ class OMLBase:
     #
     def _marshal_measurement(self, mpname, values):
         timestamp = time() - self._starttime
-        stream, names, schema, schema_str, seqno, meta_seqno = self._schemas[mpname]
-        self._schemas[mpname] = (stream, names, schema, schema_str, seqno+1, meta_seqno)
+        stream, names, schema, schema_str, seqno = self._schemas[mpname]
+        self._schemas[mpname] = (stream, names, schema, schema_str, seqno+1)
         return self._marshal(timestamp, stream, seqno, schema, values)
 
 
@@ -393,26 +393,26 @@ class OMLBase:
     # Marshal metadata
     #
     def _marshal_metadata(self, mpname, key, value, fname):
-        # get names, meta_seqno for MP
+
+        # get stream, schema + seqno from the schema 0 MP
+        stream, names, schema, schema_str, seqno = self._schemas["_experiment_metadata"]
+        self._schemas["_experiment_metadata"] = (stream, names, schema, schema_str, seqno+1)
+
+        # get names for MP
         timestamp = time() - self._starttime
-        stream, names, schema, schema_str, seqno, meta_seqno = self._schemas[mpname]
-        self._schemas[mpname] = (stream, names, schema, schema_str, seqno, meta_seqno+1)
-        # get stream + schema from the schema 0 MP
-        stream, _, schema, _, _, _ = self._schemas["_experiment_metadata"]
+        _, names, _, _, _  = self._schemas[mpname]
+
         # setup the subject
         subject = "."
-        if mpname == "_experiment_metadata":
-            target = mpname
-        else:
-            target = self._appname + "_" + mpname
-            subject += target
+        if mpname != "_experiment_metadata":
+            subject += self._appname + "_" + mpname
             if fname:
                 if fname in names:
                     subject += "." + fname
                 else:
                     OMLBase._error("Field '%s' not found in MP '%s', not reporting" % (fname, mpname))
                     return None
-        return self._marshal(timestamp, stream, meta_seqno, schema, [subject, key, value])
+        return self._marshal(timestamp, stream, seqno, schema, [subject, key, value])
 
 
     # Marshal measurement/metadata values
@@ -526,20 +526,20 @@ class OMLBase:
     # Initialization helper function
     #
     @staticmethod
-    def _init_from(param, arg, env, depr, default):
+    def _init_from(param, arg, env, depr = None, default = None):
         if param:
             return param
         elif arg in OMLBase._args.__dict__:
             return OMLBase._args.__dict__[arg]
         elif env in os.environ.keys():
             return os.environ[env]
-        elif depr and depr in os.environ.keys():
+        elif depr is not None and depr in os.environ.keys():
             OMLBase._warning("%s is deprecated; please use %s instead" % (depr, env))
             return os.environ[depr]
-        elif default:
+        elif default is not None:
             return default
         else:
-            OMLBase._error("No %s specified" % arg)
+            OMLBase._error("No %s specified" % param)
             return None
 
 
@@ -561,7 +561,7 @@ class OMLBase:
     #
     # @staticmethod
     # def _is_valid_vector_type():
-    #     return t in ("[bool]", "[int32]", "[uint32]", "[int64]", "[uint64]")
+    #     return t in ("[bool]", "[int32]", "[uint32]", "[int64]", "[uint64]", "[double]")
 
     # Escape backslashes, tabs and carriage returns and newlines in s
     #
