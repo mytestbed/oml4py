@@ -25,7 +25,7 @@ import socket
 from time import time
 from time import sleep
 
-__version__ = "2.10.3"
+__version__ = "2.10.4"
 
 # Compatibility with Python 2 and 3's string type
 if float(sys.version[:3])<3:
