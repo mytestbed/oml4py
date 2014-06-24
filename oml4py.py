@@ -54,6 +54,12 @@ class OMLBase:
 
     _args = None
 
+    # constants for controlling status
+    #
+    DISABLED = -1
+    DISCONNECTED = 0
+    CONNECTED = 1
+
     # constants for controlling error messages
     #
     ALL = 3
@@ -80,7 +86,7 @@ class OMLBase:
             OMLBase._args, sys.argv[1:] = parser.parse_known_args()
 
         # setup instance variables
-        self._state = "DISCONNECTED"
+        self._state = OMLBase.DISCONNECTED
         self._sock = None
         self._starttime = None
         self._streams = 0
@@ -143,12 +149,12 @@ class OMLBase:
     # Start a connection with the OML server
     #
     def start(self):
-        if self._state == "DISCONNECTED" or self._state == "DISABLED":
+        if self._state == OMLBase.DISCONNECTED or self._state == OMLBase.DISABLED:
             self._starttime = int(time())
             if self._has_valid_connection_attrs and self._connect():
-                self._state = "CONNECTED"
+                self._state = OMLBase.CONNECTED
             else:
-                self._state = "DISABLED"
+                self._state = OMLBase.DISABLED
                 OMLBase._warning("Disabling OML output")
         else:
             return OMLBase._error("start() called unexpectedly (state=%s)!" % (self._state))
@@ -158,13 +164,13 @@ class OMLBase:
     # Close the connection to the OML server
     #
     def close(self):
-        if self._state == "CONNECTED":
+        if self._state == OMLBase.CONNECTED:
             self._disconnect()
             self._starttime = None
-            self._state = "DISCONNECTED"
-        elif self._state == "DISABLED":
+            self._state = OMLBase.DISCONNECTED
+        elif self._state == OMLBase.DISABLED:
             self._starttime = None
-            self._state = "DISCONNECTED"
+            self._state = OMLBase.DISCONNECTED
         else:
             return OMLBase._error("close() called when MP not started")
         return True
@@ -190,9 +196,9 @@ class OMLBase:
         elif not self._is_valid_schema_str(schema_str.strip()):
             return OMLBase._error("Invalid MP schema: %s" % schema_str.strip())
         # process new MP
-        if self._state == "CONNECTED":
+        if self._state == OMLBase.CONNECTED:
             return self._add_schema(mpname, schema_str) and self._inject_schema(mpname)
-        if self._state == "DISABLED":
+        if self._state == OMLBase.DISABLED:
             return self._add_schema(mpname, schema_str) and self._write_schema(mpname)
         else:
             return self._add_schema(mpname, schema_str)
@@ -209,9 +215,9 @@ class OMLBase:
         elif values is None:
             return OMLBase._error("No measurement tuple")
         # process injection request
-        if self._state == "CONNECTED":
+        if self._state == OMLBase.CONNECTED:
             return self._inject_measurement(mpname, values)
-        elif self._state == "DISABLED":
+        elif self._state == OMLBase.DISABLED:
             return self._write_measurement(mpname, values);
         else:
             return OMLBase._error("inject() called when in %s state" % self._state)
@@ -230,9 +236,9 @@ class OMLBase:
         elif not OMLBase._is_valid_name(key):
             return OMLBase._error("'%s' is not a valid metadata key name\n" % key)
         # process injection request
-        if self._state == "CONNECTED":
+        if self._state == OMLBase.CONNECTED:
             return self._inject_metadata(mpname, key, value, fname)
-        elif self._state == "DISABLED":
+        elif self._state == OMLBase.DISABLED:
             return self._write_metadata(mpname, key, value, fname);
         else:
             return OMLBase._error("Did not call start")
