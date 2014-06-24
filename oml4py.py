@@ -26,7 +26,7 @@ from base64 import b64encode
 from time import sleep
 from time import time
 
-__version__ = "2.10.3"
+__version__ = "2.10.4"
 
 # Compatibility with Python 2 and 3's string type
 if float(sys.version[:3])<3:
